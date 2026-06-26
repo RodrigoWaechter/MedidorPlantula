@@ -1,0 +1,18 @@
+# Ambiente virtual
+venv/
+
+# PyCharm
+.idea/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Exemplos gerados (imagens anotadas e CSVs de saída)
+exemplos_demonstracao/
+
+# Outputs gerados pelo programa
+*_anotada.png
+*_medidas.csv

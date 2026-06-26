@@ -1,0 +1,15 @@
+# Dependências do Medidor de Plântulas
+# Instale com:  pip install -r requirements.txt
+
+opencv-python>=4.5
+numpy>=1.20
+scipy>=1.7
+scikit-image>=0.19
+Pillow>=8.0
+
+# Opcional: suporte a fotos HEIC (formato de iPhone).
+# Descomente a linha abaixo se for abrir arquivos .heic diretamente.
+# pillow-heif>=0.10
+
+# Observação: o Tkinter (interface gráfica) já vem junto com o Python.
+# Não é instalado pelo pip. Se faltar, veja as instruções no README.
