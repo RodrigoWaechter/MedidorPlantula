@@ -52,30 +52,28 @@ python run.py
 Uma janela vai abrir. O fluxo recomendado é:
 
 1. **Abrir imagem** — escolha a foto das plântulas.
-2. **Definir área** — arraste um retângulo sobre o papel branco (dentro da
-   caixa). Isso evita que as bordas da caixa sejam confundidas com plântulas.
-3. **Calibrar escala** — clique em dois pontos de distância conhecida na régua
+2. **Calibrar escala** — clique em dois pontos de distância conhecida na régua
    (por exemplo, o começo e o fim de 10 cm) e informe quantos centímetros há
    entre eles. A partir daí as medidas saem na unidade real.
-4. **Detectar automaticamente** — o programa traça sozinho as plântulas que
-   consegue identificar. Use o controle **Sensibilidade** e clique novamente
-   se quiser pegar filamentos mais fracos (valores maiores) ou evitar ruído
-   (valores menores).
+3. **Medir manualmente** — clique ao longo do filamento de cada plântula, do
+   topo até a ponta da raiz, acompanhando as curvas. Pressione **Enter** para
+   concluir (ou **Esc** para cancelar).
+4. **Conferir o estrangulamento** — o ponto **magenta** é sugerido
+   automaticamente a partir da região mais escura próxima ao topo, mas deve ser
+   conferido. Se necessário, arraste-o para o lugar onde está a semente.
 5. **Ajustar** o que for necessário:
    - **Selecionar:** clique sobre uma plântula.
    - **Mover o estrangulamento:** arraste o ponto **magenta** para o lugar
      onde está a semente (divide hipocótilo e raiz).
    - **Ajustar topo/ponta:** arraste o ponto **vermelho** (topo) ou
      **amarelo** (ponta).
-   - **Traçar manual:** quando uma plântula não foi detectada (ou ficou
-     incompleta), clique em **Traçar manual** e vá clicando ao longo do
-     filamento, do topo até a ponta, acompanhando as curvas. Pressione
-     **Enter** para concluir (ou **Esc** para cancelar). Depois arraste o
-     ponto magenta para o estrangulamento.
+   - **Sugerir estrangulamento:** recalcula somente o ponto magenta da
+     plântula selecionada. O traçado e o comprimento continuam manuais.
    - **Remover:** selecione uma plântula e clique em **Remover** (ou tecla
-     Delete) para apagar detecções erradas.
+     Delete) para apagar medições erradas.
 6. **Exportar CSV** e **Exportar imagem** — salva a tabela com as medidas e a
-   foto com as marcações.
+   foto com as marcações. O CSV exige escala calibrada para registrar valores em
+   centímetros ou milímetros.
 
 ### Navegação na imagem
 - **Roda do mouse:** aproximar / afastar (zoom).
@@ -92,55 +90,37 @@ Uma janela vai abrir. O fluxo recomendado é:
 
 ---
 
-## 3. Modo linha de comando (opcional)
+## 3. Critério de medição e calibração
 
-Para analisar uma foto sem abrir a janela (útil para processar várias de uma
-vez ou para conferência rápida):
+A medição usada no resultado final é **manual**. O usuário traça a plântula com
+uma sequência de pontos, e o programa calcula o comprimento somando os trechos
+desse caminho em pixels. Assim o comprimento acompanha curvas, em vez de medir
+apenas uma reta entre topo e ponta.
 
-```
-python analisar_cli.py FOTO.png
-```
+A conversão para unidade real é feita pela calibração:
 
-Opções úteis:
+1. O usuário clica dois pontos de distância conhecida na régua visível na foto
+   ou em outro objeto de referência.
+2. O programa calcula a razão `pixels por unidade real`.
+3. Os comprimentos dos segmentos são divididos por essa razão e exportados em
+   centímetros ou milímetros.
 
-```
-python analisar_cli.py FOTO.png --sensibilidade 60 --saida resultados
-python analisar_cli.py FOTO.png --escala-px 500 --escala-real 10 --unidade cm
-```
-
-- `--sensibilidade` (0 a 100): quanto maior, mais filamentos fracos são pegos.
-- `--saida`: pasta onde salvar os resultados.
-- `--escala-px` e `--escala-real`: calibração pela linha de comando — a
-  distância em pixels e a distância real correspondente.
-
-O programa gera, na pasta de saída, uma imagem `*_anotada.png` com as marcações
-e uma tabela `*_medidas.csv`.
-
-> Sem calibração, as medidas saem em pixels. A interface gráfica é o jeito mais
-> fácil de calibrar (basta clicar dois pontos na régua).
+Sem calibração, os valores exibidos na tela ficam em pixels apenas para
+conferência durante o trabalho. A exportação CSV do resultado final exige
+calibração.
 
 ---
 
 ## 4. Como funciona (resumo técnico)
 
-1. A imagem é reduzida para uma resolução de trabalho e a área do papel é
-   isolada (papel claro e pouco colorido).
-2. O filamento branco — quase invisível sobre o papel branco — é realçado com um
-   **filtro de vasos (filtro de Sato / vesselness)** do scikit-image, que
-   destaca estruturas finas e alongadas.
-3. Cada plântula vira uma máscara, que é **esqueletizada** (reduzida a uma linha
-   de 1 pixel). O **caminho mais longo** desse esqueleto é encontrado com o
-   algoritmo de **Dijkstra**, com peso maior para passos na diagonal — assim o
-   comprimento medido segue o caminho real, acompanhando curvas.
-4. O **estrangulamento** é localizado pelo ponto mais escuro perto do topo (a
-   semente), separando hipocótilo e raiz.
-5. Os comprimentos são convertidos de pixels para a unidade real usando a
-   calibração feita na régua.
-
-A detecção automática serve como um **rascunho**: ela acerta a maioria das
-plântulas bem visíveis, e a interface permite **ajustar ou traçar manualmente**
-os casos difíceis (filamentos muito fracos, plântulas sobrepostas, etc.),
-garantindo medidas confiáveis.
+1. A imagem é exibida em um canvas com zoom e deslocamento.
+2. O usuário traça manualmente cada plântula do topo até a ponta da raiz.
+3. O programa soma as distâncias entre os pontos traçados para obter o
+   comprimento digital em pixels.
+4. O **estrangulamento** pode ser sugerido automaticamente pelo ponto mais escuro
+   próximo ao topo do caminho, mas permanece ajustável pelo usuário.
+5. Os comprimentos são convertidos para unidade real usando a calibração feita
+   na régua da imagem ou em outra referência conhecida.
 
 ---
 

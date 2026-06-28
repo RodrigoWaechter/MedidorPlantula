@@ -2,10 +2,11 @@
 Janela principal da interface gráfica.
 
 Reúne a barra de ferramentas, o canvas interativo e o painel de resultados,
-e coordena as ações: abrir imagem, detectar, calibrar, ajustar e exportar.
+e coordena as ações: abrir imagem, calibrar, medir manualmente, ajustar e exportar.
 """
 
 from __future__ import annotations
+import math
 import os
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
@@ -13,9 +14,7 @@ from tkinter import ttk, filedialog, messagebox
 from PIL import Image
 
 from nucleo import imagem as nimg
-from nucleo import exportar
-from nucleo.segmentacao import ParametrosSegmentacao
-from nucleo.analise import detectar_plantulas
+from nucleo import exportar, tracado
 from nucleo.modelos import Projeto, Calibracao
 
 from interface.canvas_imagem import (
@@ -68,18 +67,10 @@ class Aplicacao(tk.Tk):
 
         botao("Abrir imagem", self.abrir_imagem)
         sep()
-        botao("Detectar automaticamente", self.detectar)
-        tk.Label(barra, text="Sensibilidade", bg="#e8e8e8").pack(side="left", padx=(8, 2))
-        self.var_sens = tk.IntVar(value=55)
-        self.slider = tk.Scale(barra, from_=0, to=100, orient="horizontal",
-                               variable=self.var_sens, length=140,
-                               bg="#e8e8e8", highlightthickness=0, showvalue=True)
-        self.slider.pack(side="left")
-        sep()
-        botao("Definir área", lambda: self._set_modo(MODO_AREA))
         botao("Calibrar escala", lambda: self._set_modo(MODO_CALIBRAR))
         sep()
-        botao("Traçar manual", lambda: self._set_modo(MODO_TRACAR))
+        botao("Medir manualmente", lambda: self._set_modo(MODO_TRACAR))
+        botao("Sugerir estrangulamento", self.sugerir_estrangulamento)
         botao("Remover", self.remover_selecionada)
         sep()
         botao("Exportar CSV", self.exportar_csv)
@@ -136,7 +127,7 @@ class Aplicacao(tk.Tk):
 
     def _construir_status(self):
         self.var_status = tk.StringVar(
-            value="Abra uma imagem para começar (botão Abrir imagem ou Ctrl+O).")
+            value="Abra uma imagem, calibre a escala pela régua e meça manualmente.")
         self.status = tk.Label(self, textvariable=self.var_status, anchor="w",
                                bg="#dcdcdc", padx=8, pady=4)
         self.status.grid(row=2, column=0, columnspan=2, sticky="ew")
@@ -176,35 +167,69 @@ class Aplicacao(tk.Tk):
         self._atualizar_calibracao_label()
         self.var_status.set(
             f"Imagem aberta: {os.path.basename(cam)}. "
-            "Sugestão: defina a área, calibre a escala e clique em Detectar.")
+            "Calibre a escala pela régua e use Medir manualmente em cada plântula.")
 
-    def detectar(self):
+    def sugerir_estrangulamento(self):
         if self.img_bgr is None:
             messagebox.showinfo("Sem imagem", "Abra uma imagem primeiro.")
             return
-        self.var_status.set("Detectando plântulas... aguarde.")
-        self.update_idletasks()
-
-        par = ParametrosSegmentacao(sensibilidade=self.var_sens.get())
-        try:
-            plantulas = detectar_plantulas(self.img_bgr, par, self.roi_retangulo)
-        except Exception as e:
-            messagebox.showerror("Erro na detecção", str(e))
-            self.var_status.set("Falha na detecção.")
+        plantula = self.canvas.selecionada
+        if plantula is None:
+            messagebox.showinfo("Selecione uma plântula",
+                                "Trace ou selecione uma plântula manual antes.")
             return
+        if self._aplicar_sugestao_estrangulamento(plantula):
+            self.canvas.redesenhar()
+            self._atualizar_tabela()
+            self.var_status.set(
+                "Estrangulamento sugerido automaticamente. Confira o ponto magenta "
+                "e arraste se precisar ajustar.")
+        else:
+            messagebox.showinfo("Traçado insuficiente",
+                                "Trace ao menos dois pontos da plântula antes.")
 
-        # preserva calibração e plântulas feitas à mão
-        manuais = [p for p in self.projeto.plantulas if not p.origem_automatica]
-        self.projeto.plantulas = plantulas + manuais
-        self.projeto.proximo_id = len(self.projeto.plantulas) + 1
-        self.projeto.renumerar()
+    def _aplicar_sugestao_estrangulamento(self, plantula):
+        amostras, mapa = self._amostrar_caminho(plantula.caminho)
+        if len(amostras) < 4:
+            return False
 
-        self.canvas.definir_plantulas(self.projeto.plantulas)
-        self.canvas.selecionada = None
-        self._atualizar_tabela()
-        self.var_status.set(
-            f"{len(plantulas)} plântula(s) detectada(s) automaticamente. "
-            "Ajuste o que precisar arrastando os pontos ou traçando manualmente.")
+        import cv2
+        canal_v = cv2.cvtColor(self.img_bgr, cv2.COLOR_BGR2HSV)[:, :, 2]
+        idx_amostra = tracado.localizar_estrangulamento(amostras, canal_v)
+        idx_amostra = max(0, min(idx_amostra, len(mapa) - 1))
+        seg_i, t, x, y = mapa[idx_amostra]
+
+        if t <= 0.2:
+            plantula.idx_estrangulamento = seg_i
+        elif t >= 0.8:
+            plantula.idx_estrangulamento = min(seg_i + 1, len(plantula.caminho) - 1)
+        else:
+            plantula.caminho.insert(seg_i + 1, (x, y))
+            plantula.idx_estrangulamento = seg_i + 1
+        return True
+
+    def _amostrar_caminho(self, caminho):
+        if self.img_bgr is None or len(caminho) < 2:
+            return [], []
+
+        h, w = self.img_bgr.shape[:2]
+        amostras = []
+        mapa = []
+        for i in range(len(caminho) - 1):
+            ax, ay = caminho[i]
+            bx, by = caminho[i + 1]
+            dist = math.hypot(bx - ax, by - ay)
+            passos = max(1, int(math.ceil(dist / 2.0)))
+            inicio = 0 if i == 0 else 1
+            for s in range(inicio, passos + 1):
+                t = s / passos
+                x = ax + (bx - ax) * t
+                y = ay + (by - ay) * t
+                px = max(0, min(w - 1, int(round(x))))
+                py = max(0, min(h - 1, int(round(y))))
+                amostras.append((py, px))
+                mapa.append((i, t, x, y))
+        return amostras, mapa
 
     def remover_selecionada(self):
         self.canvas._deletar_selecionada()
@@ -217,7 +242,6 @@ class Aplicacao(tk.Tk):
 
     # ---- callbacks do canvas ----
     def _ao_calibrar(self, p1, p2):
-        import math
         d_px = math.hypot(p2[0] - p1[0], p2[1] - p1[1])
         if d_px < 2:
             messagebox.showwarning("Calibração",
@@ -239,20 +263,25 @@ class Aplicacao(tk.Tk):
     def _ao_definir_area(self, x, y, w, h):
         self.roi_retangulo = (x, y, w, h)
         self.var_status.set(
-            "Área de trabalho definida. Clique em Detectar para usá-la.")
+            "Área de trabalho definida.")
 
     def _ao_criar_plantula(self, caminho):
-        idx = max(1, len(caminho) // 8)
-        p = self.projeto.adicionar_plantula(caminho, idx_estrang=idx,
+        p = self.projeto.adicionar_plantula(caminho, idx_estrang=0,
                                             automatica=False)
+        sugerido = self._aplicar_sugestao_estrangulamento(p)
         self.projeto.renumerar()
         self.canvas.definir_plantulas(self.projeto.plantulas)
         self.canvas.selecionada = p
         self._atualizar_tabela()
         self._ao_mudar_selecao()
-        self.var_status.set(
-            "Plântula criada. Arraste o ponto magenta para o estrangulamento "
-            "(onde está a semente).")
+        if sugerido:
+            self.var_status.set(
+                "Plântula medida manualmente. O ponto magenta foi sugerido; "
+                "arraste-o se precisar corrigir o estrangulamento.")
+        else:
+            self.var_status.set(
+                "Plântula medida manualmente. Arraste o ponto magenta para o "
+                "estrangulamento, onde está a semente.")
 
     def _ao_mudar_selecao(self):
         sel = self.canvas.selecionada
@@ -318,6 +347,12 @@ class Aplicacao(tk.Tk):
         if not self.projeto.plantulas:
             messagebox.showinfo("Nada a exportar", "Não há plântulas medidas.")
             return
+        if not self.projeto.calibracao.definida:
+            messagebox.showinfo(
+                "Escala não calibrada",
+                "Calibre a escala usando a régua da imagem antes de exportar "
+                "as medidas em cm ou mm.")
+            return
         cam = filedialog.asksaveasfilename(
             title="Salvar tabela CSV", defaultextension=".csv",
             initialfile=self._nome_saida("medidas.csv"),
@@ -360,23 +395,23 @@ class DialogoCalibracao(tk.Toplevel):
     """Pede a distância real entre os dois pontos clicados e a unidade."""
     def __init__(self, parent, distancia_px):
         super().__init__(parent)
+        self.withdraw()
         self.title("Calibrar escala")
         self.resizable(False, False)
         self.resultado = None
         self.transient(parent)
-        self.grab_set()
+        self.protocol("WM_DELETE_WINDOW", self._cancelar)
 
         tk.Label(self, text=f"Você marcou uma distância de {distancia_px:.0f} pixels.",
-                 padx=14, pady=(14, 4)).grid(row=0, column=0, columnspan=3, sticky="w")
+                 padx=14).grid(row=0, column=0, columnspan=3, sticky="w",
+                               pady=(14, 4))
         tk.Label(self, text="Qual a distância real correspondente?",
                  padx=14).grid(row=1, column=0, columnspan=3, sticky="w")
 
         self.var_valor = tk.StringVar(value="10")
         self.var_unidade = tk.StringVar(value="cm")
-        ent = tk.Entry(self, textvariable=self.var_valor, width=10)
-        ent.grid(row=2, column=0, padx=(14, 4), pady=10, sticky="w")
-        ent.focus_set()
-        ent.select_range(0, "end")
+        self.ent_valor = tk.Entry(self, textvariable=self.var_valor, width=10)
+        self.ent_valor.grid(row=2, column=0, padx=(14, 4), pady=10, sticky="w")
         tk.Radiobutton(self, text="cm", variable=self.var_unidade,
                        value="cm").grid(row=2, column=1)
         tk.Radiobutton(self, text="mm", variable=self.var_unidade,
@@ -391,6 +426,24 @@ class DialogoCalibracao(tk.Toplevel):
 
         self.bind("<Return>", lambda e: self._ok())
         self.bind("<Escape>", lambda e: self._cancelar())
+        self._mostrar_modal(parent)
+
+    def _mostrar_modal(self, parent):
+        self.update_idletasks()
+        parent.update_idletasks()
+
+        largura = self.winfo_reqwidth()
+        altura = self.winfo_reqheight()
+        x = parent.winfo_rootx() + max(0, (parent.winfo_width() - largura) // 2)
+        y = parent.winfo_rooty() + max(0, (parent.winfo_height() - altura) // 2)
+        self.geometry(f"+{x}+{y}")
+
+        self.deiconify()
+        self.lift(parent)
+        self.wait_visibility()
+        self.grab_set()
+        self.ent_valor.focus_set()
+        self.ent_valor.select_range(0, "end")
 
     def _ok(self):
         txt = self.var_valor.get().replace(",", ".").strip()

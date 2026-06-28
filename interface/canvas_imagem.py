@@ -249,7 +249,7 @@ class CanvasImagem(tk.Frame):
                            "na régua. Depois informe a distância real.",
             MODO_AREA: "Área de trabalho: arraste um retângulo sobre o papel "
                        "(dentro da caixa) para limitar a detecção.",
-            MODO_TRACAR: "Traçado manual: clique ao longo do filamento, do topo até "
+            MODO_TRACAR: "Medição manual: clique ao longo do filamento, do topo até "
                          "a ponta. Pressione Enter para concluir, Esc para cancelar.",
         }.get(self.modo, "")
         self.ao_status(msg)
