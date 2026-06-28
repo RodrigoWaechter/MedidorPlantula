@@ -16,7 +16,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 def main():
     try:
-        import tkinter  # noqa: F401
+        import tkinter
     except ModuleNotFoundError:
         print("ERRO: o módulo Tkinter não está disponível.\n")
         print("O Tkinter normalmente já vem com o Python. Se não veio:")
@@ -27,8 +27,8 @@ def main():
         sys.exit(1)
 
     try:
-        import cv2, numpy, scipy, skimage  # noqa: F401
-        from PIL import Image  # noqa: F401
+        import cv2, numpy
+        from PIL import Image
     except ModuleNotFoundError as e:
         print(f"ERRO: faltam bibliotecas: {e.name}\n")
         print("Instale as dependências com:")

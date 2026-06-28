@@ -1,14 +1,12 @@
 """
 Canvas interativo da interface gráfica.
 
-Responsável por:
-  - exibir a imagem com zoom (roda do mouse) e deslocamento/pan (botão direito);
-  - desenhar as plântulas (caminhos coloridos e pontos-chave);
-  - permitir edição (arrastar o estrangulamento, o topo e a ponta);
-  - os modos de calibração (2 cliques), definição da área e traçado manual.
+Responsável por exibir a imagem com zoom e pan, desenhar as plântulas,
+e gerenciar os modos de interação: calibração, traçado manual e edição
+de pontos (arrastar topo, estrangulamento e ponta).
 
-Toda a conversão entre coordenadas da TELA e da IMAGEM ORIGINAL fica centralizada
-em `img_para_canvas` e `canvas_para_img`, para evitar erros de alinhamento.
+A conversão entre coordenadas de tela e da imagem original fica centralizada
+em `img_para_canvas` e `canvas_para_img`.
 """
 
 from __future__ import annotations
@@ -18,23 +16,22 @@ from PIL import Image, ImageTk
 
 from nucleo.modelos import Plantula
 
-# Modos de interação
 MODO_NAVEGAR = "navegar"
 MODO_CALIBRAR = "calibrar"
 MODO_AREA = "area"
 MODO_TRACAR = "tracar"
 
-# Cores (hexadecimal, para o Tkinter)
-COR_SEG1 = "#3cb43c"     # verde - hipocótilo
-COR_SEG2 = "#2882e6"     # azul  - raiz
-COR_TOPO = "#e60000"     # vermelho
-COR_ESTR = "#c800c8"     # magenta
-COR_PONTA = "#e6c800"    # amarelo
-COR_SEL = "#ff8000"      # laranja - seleção
-COR_AREA = "#00b0b0"     # ciano - área de trabalho
+# Cores dos elementos desenhados (hexadecimal, padrão Tkinter)
+COR_SEG1 = "#3cb43c"   # verde  - hipocótilo
+COR_SEG2 = "#2882e6"   # azul   - raiz
+COR_TOPO = "#e60000"   # vermelho
+COR_ESTR = "#c800c8"   # magenta - estrangulamento
+COR_PONTA = "#e6c800"  # amarelo
+COR_SEL = "#ff8000"    # laranja - seleção / traçado em andamento
+COR_AREA = "#00b0b0"   # ciano  - área de trabalho
 
-RAIO_ALCA = 6            # raio das alças em pixels de tela
-TOLERANCIA_CLIQUE = 12   # distância em px de tela para "pegar" uma alça
+RAIO_ALCA = 6           # raio dos pontos de controle em pixels de tela
+TOLERANCIA_CLIQUE = 12  # distância máxima (px de tela) para "pegar" um ponto
 
 
 class CanvasImagem(tk.Frame):
@@ -49,43 +46,40 @@ class CanvasImagem(tk.Frame):
         self.rowconfigure(0, weight=1)
         self.columnconfigure(0, weight=1)
 
-        # imagem
+        # imagem base e parâmetros de visualização
         self.pil_base: Optional[Image.Image] = None
         self.img_w = 0
         self.img_h = 0
         self.zoom = 1.0
-        self.ox = 0.0   # posição no canvas do pixel (0,0) da imagem
+        self.ox = 0.0   # offset em pixels de tela: onde o pixel (0,0) da imagem aparece
         self.oy = 0.0
-        self._tk_img = None  # referência viva do PhotoImage
+        self._tk_img = None  # mantém referência viva para o Tkinter não descartar
 
-        # estado
+        # modo de interação e estado do traçado
         self.modo = MODO_NAVEGAR
         self.plantulas: List[Plantula] = []
         self.selecionada: Optional[Plantula] = None
         self._precisa_ajustar = False
 
-        # arrasto de pan
-        self._pan_inicio = None
-        # arrasto de alça (edição)
-        self._arrasto = None  # dict com info do que está sendo arrastado
-        # calibração / área / traçado
-        self._pontos_temp: List[Tuple[float, float]] = []
-        self._retangulo_temp = None
+        self._pan_inicio = None   # ponto inicial do pan com botão direito
+        self._arrasto = None      # alça sendo arrastada no modo navegar
+        self._pontos_temp: List[Tuple[float, float]] = []  # pontos do traçado em andamento
+        self._retangulo_temp = None  # retângulo da área de trabalho sendo desenhado
         self._area_inicio = None
+        self._mouse_canvas: Optional[Tuple[float, float]] = None  # posição atual do mouse
+        self._plantula_editando: Optional[Plantula] = None  # plântula reaberta para edição
 
-        # callbacks que a janela principal define
+        # callbacks definidos pela janela principal
         self.ao_calibrar: Optional[Callable] = None
         self.ao_definir_area: Optional[Callable] = None
         self.ao_criar_plantula: Optional[Callable] = None
+        self.ao_reabrir_plantula: Optional[Callable] = None
         self.ao_mudar_selecao: Optional[Callable] = None
         self.ao_editar: Optional[Callable] = None
         self.ao_status: Optional[Callable] = None
 
         self._bind_eventos()
 
-    # ------------------------------------------------------------------ #
-    #  Configuração de imagem e projeto                                   #
-    # ------------------------------------------------------------------ #
     def definir_imagem(self, pil_image: Image.Image):
         self.pil_base = pil_image.convert("RGB")
         self.img_w, self.img_h = self.pil_base.size
@@ -94,6 +88,7 @@ class CanvasImagem(tk.Frame):
         self.after(50, self._tentar_ajuste_inicial)
 
     def _tentar_ajuste_inicial(self):
+        """Espera o canvas ter tamanho definido antes de ajustar o zoom inicial."""
         if self._precisa_ajustar and self.canvas.winfo_width() > 1:
             self._precisa_ajustar = False
             self.ajustar_a_janela()
@@ -112,23 +107,19 @@ class CanvasImagem(tk.Frame):
         ch = max(1, self.canvas.winfo_height())
         self.zoom = min(cw / self.img_w, ch / self.img_h) * 0.98
         self.zoom = max(0.02, self.zoom)
-        # centraliza
+        # centraliza a imagem no canvas
         self.ox = (cw - self.img_w * self.zoom) / 2
         self.oy = (ch - self.img_h * self.zoom) / 2
         self.redesenhar()
 
-    # ------------------------------------------------------------------ #
-    #  Conversão de coordenadas                                           #
-    # ------------------------------------------------------------------ #
     def img_para_canvas(self, x: float, y: float) -> Tuple[float, float]:
+        """Converte coordenadas da imagem original para pixels de tela."""
         return x * self.zoom + self.ox, y * self.zoom + self.oy
 
     def canvas_para_img(self, cx: float, cy: float) -> Tuple[float, float]:
+        """Converte pixels de tela para coordenadas da imagem original."""
         return (cx - self.ox) / self.zoom, (cy - self.oy) / self.zoom
 
-    # ------------------------------------------------------------------ #
-    #  Desenho                                                            #
-    # ------------------------------------------------------------------ #
     def redesenhar(self):
         self.canvas.delete("all")
         if self.pil_base is None:
@@ -141,7 +132,7 @@ class CanvasImagem(tk.Frame):
     def _desenhar_imagem(self):
         cw = max(1, self.canvas.winfo_width())
         ch = max(1, self.canvas.winfo_height())
-        # região visível da imagem (em coordenadas de imagem)
+        # recorta apenas a região visível para não renderizar a imagem inteira
         ix0 = max(0, int((0 - self.ox) / self.zoom))
         iy0 = max(0, int((0 - self.oy) / self.zoom))
         ix1 = min(self.img_w, int((cw - self.ox) / self.zoom) + 1)
@@ -151,6 +142,7 @@ class CanvasImagem(tk.Frame):
         recorte = self.pil_base.crop((ix0, iy0, ix1, iy1))
         nw = max(1, int((ix1 - ix0) * self.zoom))
         nh = max(1, int((iy1 - iy0) * self.zoom))
+        # NEAREST preserva pixels nítidos ao ampliar; BILINEAR suaviza ao reduzir
         metodo = Image.NEAREST if self.zoom > 1 else Image.BILINEAR
         recorte = recorte.resize((nw, nh), metodo)
         self._tk_img = ImageTk.PhotoImage(recorte)
@@ -164,8 +156,9 @@ class CanvasImagem(tk.Frame):
                 continue
             sel = (p is self.selecionada)
             ie = max(0, min(p.idx_estrangulamento, len(p.caminho) - 1))
-            larg = 4 if sel else 2
+            larg = 4 if sel else 2  # plântula selecionada aparece mais grossa
 
+            # segmento 1: topo → estrangulamento (verde)
             pts1 = []
             for i in range(0, ie + 1):
                 cx, cy = self.img_para_canvas(*p.caminho[i])
@@ -173,6 +166,8 @@ class CanvasImagem(tk.Frame):
             if len(pts1) >= 4:
                 self.canvas.create_line(*pts1, fill=COR_SEG1, width=larg,
                                         capstyle="round", joinstyle="round")
+
+            # segmento 2: estrangulamento → ponta (azul)
             pts2 = []
             for i in range(ie, len(p.caminho)):
                 cx, cy = self.img_para_canvas(*p.caminho[i])
@@ -181,18 +176,18 @@ class CanvasImagem(tk.Frame):
                 self.canvas.create_line(*pts2, fill=COR_SEG2, width=larg,
                                         capstyle="round", joinstyle="round")
 
-            # alças
+            # pontos de controle arrastáveis
             self._alca(p.topo, COR_TOPO, sel)
             self._alca(p.estrangulamento, COR_ESTR, sel)
             self._alca(p.ponta, COR_PONTA, sel)
 
-            # rótulo
             tx, ty = self.img_para_canvas(*p.topo)
             self.canvas.create_text(tx + 10, ty - 10, text=p.rotulo or f"P{p.id}",
                                     fill="#ffffff", anchor="w",
                                     font=("Segoe UI", 10, "bold"))
 
     def _alca(self, ponto, cor, selecionada=False):
+        """Desenha um ponto de controle circular (alça) na posição dada."""
         if ponto is None:
             return
         cx, cy = self.img_para_canvas(*ponto)
@@ -202,6 +197,7 @@ class CanvasImagem(tk.Frame):
                                 fill=cor, outline=contorno, width=2)
 
     def _desenhar_area_temp(self):
+        """Desenha o retângulo da área de trabalho enquanto está sendo definido."""
         if self._retangulo_temp is not None:
             x, y, w, h = self._retangulo_temp
             cx0, cy0 = self.img_para_canvas(x, y)
@@ -210,9 +206,12 @@ class CanvasImagem(tk.Frame):
                                          outline=COR_AREA, width=2, dash=(6, 4))
 
     def _desenhar_pontos_temp(self):
+        """
+        Desenha os pontos já clicados no traçado em andamento e uma linha guia
+        do último ponto até o cursor, para indicar o próximo trecho antes de clicar.
+        """
         if not self._pontos_temp:
             return
-        # linha do traçado/calibração em andamento
         pts = []
         for (x, y) in self._pontos_temp:
             cx, cy = self.img_para_canvas(x, y)
@@ -222,16 +221,21 @@ class CanvasImagem(tk.Frame):
         if len(pts) >= 4:
             cor = "#ffffff" if self.modo == MODO_CALIBRAR else COR_SEG2
             self.canvas.create_line(*pts, fill=cor, width=2, dash=(4, 3))
+        # linha guia até o cursor
+        if self._mouse_canvas and self.modo in (MODO_TRACAR, MODO_CALIBRAR):
+            ux, uy = self.img_para_canvas(*self._pontos_temp[-1])
+            mx, my = self._mouse_canvas
+            self.canvas.create_line(ux, uy, mx, my,
+                                    fill="#aaaaaa", width=1, dash=(3, 4))
 
-    # ------------------------------------------------------------------ #
-    #  Modos                                                              #
-    # ------------------------------------------------------------------ #
     def set_modo(self, modo: str):
+        """Muda o modo de interação e reinicia o estado temporário."""
         self.modo = modo
         self._pontos_temp = []
         self._retangulo_temp = None
         self._arrasto = None
         self._area_inicio = None
+        self._plantula_editando = None
         cursores = {MODO_NAVEGAR: "arrow", MODO_CALIBRAR: "tcross",
                     MODO_AREA: "tcross", MODO_TRACAR: "pencil"}
         self.canvas.configure(cursor=cursores.get(modo, "arrow"))
@@ -239,6 +243,7 @@ class CanvasImagem(tk.Frame):
         self.redesenhar()
 
     def _status_do_modo(self):
+        """Atualiza a barra de status com a instrução do modo atual."""
         if not self.ao_status:
             return
         msg = {
@@ -249,44 +254,46 @@ class CanvasImagem(tk.Frame):
                            "na régua. Depois informe a distância real.",
             MODO_AREA: "Área de trabalho: arraste um retângulo sobre o papel "
                        "(dentro da caixa) para limitar a detecção.",
-            MODO_TRACAR: "Traçado manual: clique ao longo do filamento, do topo até "
+            MODO_TRACAR: "Medição manual: clique ao longo do filamento, do topo até "
                          "a ponta. Pressione Enter para concluir, Esc para cancelar.",
         }.get(self.modo, "")
         self.ao_status(msg)
 
-    # ------------------------------------------------------------------ #
-    #  Eventos                                                            #
-    # ------------------------------------------------------------------ #
     def _bind_eventos(self):
         c = self.canvas
         c.bind("<ButtonPress-1>", self._press1)
         c.bind("<B1-Motion>", self._move1)
         c.bind("<ButtonRelease-1>", self._release1)
         c.bind("<Double-Button-1>", self._duplo)
-        # pan com botão direito (e botão do meio)
+        c.bind("<Motion>", self._motion)
+        # pan: botão direito ou do meio
         for b in ("3", "2"):
             c.bind(f"<ButtonPress-{b}>", self._pan_press)
             c.bind(f"<B{b}-Motion>", self._pan_move)
             c.bind(f"<ButtonRelease-{b}>", self._pan_release)
-        # zoom
-        c.bind("<MouseWheel>", self._wheel)          # Windows / Mac
-        c.bind("<Button-4>", lambda e: self._zoom_em(e.x, e.y, 1.2))   # Linux
+        # zoom: Windows/Mac usa delta; Linux usa Button-4/5
+        c.bind("<MouseWheel>", self._wheel)
+        c.bind("<Button-4>", lambda e: self._zoom_em(e.x, e.y, 1.2))
         c.bind("<Button-5>", lambda e: self._zoom_em(e.x, e.y, 1/1.2))
-        # teclas
         c.bind("<Return>", lambda e: self._concluir_tracado())
         c.bind("<Escape>", lambda e: self.set_modo(MODO_NAVEGAR))
         c.bind("<Delete>", lambda e: self._deletar_selecionada())
         c.configure(takefocus=True)
         c.bind("<Enter>", lambda e: c.focus_set())
 
-    # ---- botão esquerdo ----
+    def _motion(self, e):
+        """Atualiza a posição do mouse e redesenha a linha guia durante o traçado."""
+        self._mouse_canvas = (e.x, e.y)
+        if self.modo in (MODO_TRACAR, MODO_CALIBRAR) and self._pontos_temp:
+            self.redesenhar()
+
     def _press1(self, e):
         if self.pil_base is None:
             return
         ix, iy = self.canvas_para_img(e.x, e.y)
 
         if self.modo == MODO_NAVEGAR:
-            # tentar pegar uma alça da plântula selecionada (ou de qualquer uma)
+            # tenta pegar uma alça (topo, estrangulamento ou ponta)
             alvo = self._alca_no_ponto(e.x, e.y)
             if alvo is not None:
                 self.selecionada = alvo[0]
@@ -295,9 +302,13 @@ class CanvasImagem(tk.Frame):
                     self.ao_mudar_selecao()
                 self.redesenhar()
                 return
-            # senão, selecionar a plântula mais próxima do clique
+            # tenta clicar no traço de uma plântula para reabrir o traçado
             p = self._plantula_no_ponto(ix, iy)
-            self.selecionada = p
+            if p is not None:
+                self._reabrir_tracado(p, (ix, iy))
+                return
+            # clique em área vazia: deseleciona
+            self.selecionada = None
             if self.ao_mudar_selecao:
                 self.ao_mudar_selecao()
             self.redesenhar()
@@ -360,13 +371,48 @@ class CanvasImagem(tk.Frame):
         if self.modo == MODO_TRACAR:
             self._concluir_tracado()
 
+    def _reabrir_tracado(self, plantula: Plantula, ponto_img: Tuple[float, float]):
+        """
+        Reabre o traçado de uma plântula a partir do ponto mais próximo do clique,
+        descartando todos os pontos depois dele. O usuário pode então continuar
+        clicando normalmente para corrigir o trecho errado.
+        """
+        if not plantula.caminho:
+            return
+        melhor_i, melhor_d = 0, float("inf")
+        for i, (x, y) in enumerate(plantula.caminho):
+            d = (x - ponto_img[0]) ** 2 + (y - ponto_img[1]) ** 2
+            if d < melhor_d:
+                melhor_d, melhor_i = d, i
+        # precisa ter pelo menos 1 ponto antes do corte para formar um traço válido
+        if melhor_i == 0:
+            return
+        plantula.caminho = plantula.caminho[:melhor_i + 1]
+        plantula.idx_estrangulamento = min(plantula.idx_estrangulamento,
+                                           len(plantula.caminho) - 1)
+        self._plantula_editando = plantula
+        self.selecionada = plantula
+        self._pontos_temp = list(plantula.caminho)
+        self.modo = MODO_TRACAR
+        self.canvas.configure(cursor="pencil")
+        self._status_do_modo()
+        self.redesenhar()
+
     def _concluir_tracado(self):
-        if self.modo == MODO_TRACAR and len(self._pontos_temp) >= 2:
-            caminho = list(self._pontos_temp)
-            self._pontos_temp = []
+        if self.modo != MODO_TRACAR or len(self._pontos_temp) < 2:
+            return
+        caminho = list(self._pontos_temp)
+        self._pontos_temp = []
+        if self._plantula_editando is not None:
+            # atualiza a plântula existente em vez de criar uma nova
+            self._plantula_editando.caminho = caminho
+            self._plantula_editando = None
+            if self.ao_reabrir_plantula:
+                self.ao_reabrir_plantula()
+        else:
             if self.ao_criar_plantula:
                 self.ao_criar_plantula(caminho)
-            self.set_modo(MODO_NAVEGAR)
+        self.set_modo(MODO_NAVEGAR)
 
     def _deletar_selecionada(self):
         if self.selecionada is not None and self.selecionada in self.plantulas:
@@ -378,7 +424,6 @@ class CanvasImagem(tk.Frame):
                 self.ao_editar()
             self.redesenhar()
 
-    # ---- pan ----
     def _pan_press(self, e):
         self._pan_inicio = (e.x, e.y)
         self.canvas.configure(cursor="fleur")
@@ -399,7 +444,6 @@ class CanvasImagem(tk.Frame):
                     MODO_AREA: "tcross", MODO_TRACAR: "pencil"}
         self.canvas.configure(cursor=cursores.get(self.modo, "arrow"))
 
-    # ---- zoom ----
     def _wheel(self, e):
         fator = 1.2 if e.delta > 0 else 1 / 1.2
         self._zoom_em(e.x, e.y, fator)
@@ -410,18 +454,16 @@ class CanvasImagem(tk.Frame):
         novo = self.zoom * fator
         novo = max(0.02, min(8.0, novo))
         fator = novo / self.zoom
-        # manter o ponto sob o cursor fixo
+        # mantém o ponto sob o cursor fixo durante o zoom
         self.ox = cx - (cx - self.ox) * fator
         self.oy = cy - (cy - self.oy) * fator
         self.zoom = novo
         self.redesenhar()
 
-    # ------------------------------------------------------------------ #
-    #  Utilidades de seleção                                              #
-    # ------------------------------------------------------------------ #
     def _alca_no_ponto(self, cx, cy):
-        """Retorna (plantula, tipo) se houver uma alça perto de (cx,cy) na tela."""
+        """Retorna (plantula, tipo) se houver uma alça perto de (cx, cy) na tela."""
         candidatos = []
+        # prioriza as alças da plântula selecionada
         ordem = ([self.selecionada] if self.selecionada else []) + \
                 [p for p in self.plantulas if p is not self.selecionada]
         for p in ordem:
@@ -439,7 +481,8 @@ class CanvasImagem(tk.Frame):
         return candidatos[0][1], candidatos[0][2]
 
     def _plantula_no_ponto(self, ix, iy, tol_px=25):
-        """Retorna a plântula cujo caminho passa mais perto de (ix,iy) na imagem."""
+        """Retorna a plântula cujo caminho passa mais perto de (ix, iy) na imagem."""
+        # a tolerância em pixels de imagem depende do zoom atual
         melhor, melhor_d = None, (tol_px / max(self.zoom, 1e-6)) ** 2
         for p in self.plantulas:
             for (x, y) in p.caminho:

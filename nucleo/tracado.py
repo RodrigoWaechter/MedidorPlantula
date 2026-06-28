@@ -1,137 +1,125 @@
-"""
-Traçado do caminho de uma plântula a partir da sua máscara.
-
-Etapas (validadas nas imagens reais):
-  1. Esqueletização: reduz a estrutura a uma linha de 1 px de largura.
-  2. Caminho mais longo: encontra a linha mais comprida dentro do esqueleto
-     (de uma extremidade à outra), usando Dijkstra duplo com peso 1 para
-     vizinhos ortogonais e raiz(2) para diagonais — assim o comprimento segue
-     o caminho REAL, acompanhando curvas e enrolamentos (não em linha reta).
-  3. Estrangulamento: procura o pico de escuridão (semente) no terço superior
-     do caminho; o fim do tegumento marca a divisão hipocótilo/raiz.
-"""
+"""Apoio ao traçado manual: sugestão automática do ponto de estrangulamento."""
 
 from __future__ import annotations
-from typing import List, Optional, Tuple
-import heapq
+from typing import List, Tuple
+import math
 import numpy as np
-from skimage.morphology import skeletonize
+import cv2
 
-# pontos em (x, y) para os modelos; internamente usamos (linha, coluna) = (y, x)
 PontoXY = Tuple[float, float]
 
 
-def _esqueleto(mascara: np.ndarray) -> np.ndarray:
-    return skeletonize(mascara > 0)
+def _detectar_sementes_proximas(gray: np.ndarray,
+                                caminho_yx: List[Tuple[int, int]],
+                                margem: int = 80) -> List[Tuple[int, int]]:
+    """
+    Acha os contornos escuros (semente) em uma janela ao redor do trecho
+    superior do caminho. Devolve uma lista de centros (y, x).
+    """
+    H, W = gray.shape[:2]
+    n = len(caminho_yx)
+    if n < 2:
+        return []
 
+    topo = caminho_yx[: max(2, n // 2)]
+    ys = [p[0] for p in topo]
+    xs = [p[1] for p in topo]
+    y0 = max(0, min(ys) - margem)
+    y1 = min(H, max(ys) + margem)
+    x0 = max(0, min(xs) - margem)
+    x1 = min(W, max(xs) + margem)
+    if y1 <= y0 or x1 <= x0:
+        return []
 
-def _dijkstra_mais_distante(pts: set, origem: Tuple[int, int]):
-    """A partir de `origem`, devolve o pixel mais distante e os predecessores."""
-    melhor = {origem: 0.0}
-    anterior = {origem: None}
-    heap = [(0.0, origem)]
-    while heap:
-        d, u = heapq.heappop(heap)
-        if d > melhor.get(u, 1e18):
+    sub = gray[y0:y1, x0:x1]
+    suave = cv2.GaussianBlur(sub, (5, 5), 0)
+
+    # inverte para que pixels escuros (semente) fiquem brancos,
+    # depois binariza com o limiar de Otsu calculado automaticamente
+    _, escuro = cv2.threshold(suave, 0, 255,
+                              cv2.THRESH_BINARY_INV | cv2.THRESH_OTSU)
+
+    cnts, _ = cv2.findContours(escuro, cv2.RETR_EXTERNAL,
+                               cv2.CHAIN_APPROX_SIMPLE)
+    centros = []
+    for c in cnts:
+        a = cv2.contourArea(c)
+        if a < 80 or a > 8000:
             continue
-        uy, ux = u
-        for dy in (-1, 0, 1):
-            for dx in (-1, 0, 1):
-                if dy == 0 and dx == 0:
-                    continue
-                v = (uy + dy, ux + dx)
-                if v in pts:
-                    peso = 1.41421356 if (dy and dx) else 1.0
-                    nd = d + peso
-                    if nd < melhor.get(v, 1e18):
-                        melhor[v] = nd
-                        anterior[v] = u
-                        heapq.heappush(heap, (nd, v))
-    alvo = max(melhor, key=melhor.get)
-    return alvo, anterior, melhor
-
-
-def caminho_mais_longo(mascara: np.ndarray) -> Optional[List[Tuple[int, int]]]:
-    """
-    Devolve a lista de pixels (y, x) do caminho mais longo do esqueleto,
-    ordenada de cima (menor y) para baixo. None se não houver estrutura.
-    """
-    sk = _esqueleto(mascara)
-    ys, xs = np.where(sk)
-    if len(ys) < 2:
-        return None
-    pts = set(zip(ys.tolist(), xs.tolist()))
-
-    inicio = next(iter(pts))
-    a, _, _ = _dijkstra_mais_distante(pts, inicio)
-    b, anterior, _ = _dijkstra_mais_distante(pts, a)
-
-    caminho = []
-    atual = b
-    while atual is not None:
-        caminho.append(atual)
-        atual = anterior[atual]
-    caminho.reverse()
-
-    # garantir orientação topo -> ponta (topo = menor y, em cima)
-    if caminho[0][0] > caminho[-1][0]:
-        caminho.reverse()
-    return caminho
+        x, y, w, h = cv2.boundingRect(c)
+        if min(w, h) == 0 or max(w, h) / min(w, h) > 5:
+            # descarta riscos longos (bordas, fios, etc.)
+            continue
+        M = cv2.moments(c)
+        if M["m00"] == 0:
+            continue
+        # centroide pelo método dos momentos
+        cx = int(M["m10"] / M["m00"]) + x0
+        cy = int(M["m01"] / M["m00"]) + y0
+        centros.append((cy, cx))
+    return centros
 
 
 def localizar_estrangulamento(caminho_yx: List[Tuple[int, int]],
-                              canal_v: np.ndarray,
-                              fracao_topo: float = 0.34,
-                              janela: int = 6) -> int:
+                              gray: np.ndarray,
+                              fracao_topo: float = 0.5,
+                              dist_max: float = 70.0) -> int:
     """
-    Localiza o índice do estrangulamento no caminho (divisão hipocótilo/raiz).
+    Devolve o índice do ponto do caminho mais próximo do estrangulamento
+    (divisão hipocótilo / raiz), que coincide com a semente.
 
-    Procura, no terço superior do caminho, o ponto mais escuro (a semente) e
-    devolve o índice logo após o fim do tegumento escuro. Se nada se destacar,
-    devolve um índice pequeno (estrangulamento perto do topo).
+    Tenta primeiro achar a semente via contornos; se não encontrar nenhuma
+    suficientemente perto, usa o pixel mais escuro do trecho superior
+    como estimativa.
+
+    Parâmetros:
+      caminho_yx  : lista de pontos (y, x) do topo para a ponta.
+      gray        : imagem em escala de cinza.
+      fracao_topo : fração do caminho considerada trecho superior.
+      dist_max    : distância máxima (px) entre semente e caminho para aceitar.
     """
     n = len(caminho_yx)
     if n < 4:
         return 0
-    n_topo = max(3, int(n * fracao_topo))
-    H, W = canal_v.shape[:2]
+    topo = caminho_yx[: max(2, int(n * fracao_topo))]
 
-    escuridao = []
-    for (py, px) in caminho_yx[:n_topo]:
-        y0, y1 = max(0, py - janela), min(H, py + janela + 1)
-        x0, x1 = max(0, px - janela), min(W, px + janela + 1)
-        bloco = canal_v[y0:y1, x0:x1]
-        escuridao.append(255.0 - float(bloco.mean()))
-    escuridao = np.array(escuridao)
+    sementes = _detectar_sementes_proximas(gray, caminho_yx)
+    if sementes:
+        # escolhe a semente mais próxima do trecho superior
+        melhor_s = None
+        melhor_d = float("inf")
+        for s in sementes:
+            d = min(math.hypot(s[0] - p[0], s[1] - p[1]) for p in topo)
+            if d < melhor_d:
+                melhor_d, melhor_s = d, s
+        if melhor_s is not None and melhor_d <= dist_max:
+            idx = min(range(n),
+                      key=lambda i: math.hypot(caminho_yx[i][0] - melhor_s[0],
+                                               caminho_yx[i][1] - melhor_s[1]))
+            return idx
 
-    pico = int(np.argmax(escuridao))
-    # se o "pico" for fraco, a semente provavelmente não aparece -> perto do topo
-    if escuridao[pico] < 60:
-        return min(pico, n_topo // 2)
-
-    # desce do pico até a escuridão cair pela metade (fim do tegumento)
-    limiar = escuridao[pico] * 0.5
-    idx = pico
-    for i in range(pico, n_topo):
-        if escuridao[i] < limiar:
-            idx = i
-            break
-    else:
-        idx = min(pico + 3, n - 2)
-    return idx
+    # plano B: ponto mais escuro do trecho superior
+    H, W = gray.shape[:2]
+    melhor_i, melhor_v = 0, 256
+    for i, (py, px) in enumerate(topo):
+        if 0 <= py < H and 0 <= px < W:
+            v = int(gray[py, px])
+            if v < melhor_v:
+                melhor_v, melhor_i = v, i
+    return melhor_i
 
 
 def escalar_caminho(caminho_yx: List[Tuple[int, int]], escala: float) -> List[PontoXY]:
     """
-    Converte um caminho em (y, x) na imagem reduzida para pontos (x, y) na
-    imagem ORIGINAL, dividindo pela escala usada na redução.
+    Converte um caminho em (y, x) na imagem reduzida para pontos (x, y)
+    na imagem original, revertendo a escala usada na redução.
     """
     fator = 1.0 / escala if escala else 1.0
     return [(x * fator, y * fator) for (y, x) in caminho_yx]
 
 
 def simplificar(caminho: List[PontoXY], passo: int = 3) -> List[PontoXY]:
-    """Reduz a densidade de pontos mantendo extremidades (deixa o desenho leve)."""
+    """Reduz a densidade de pontos mantendo as extremidades."""
     if len(caminho) <= 2 or passo <= 1:
         return caminho
     reduzido = caminho[::passo]
