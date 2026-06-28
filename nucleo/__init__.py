@@ -1,11 +1,9 @@
-"""Núcleo de processamento (sem interface gráfica) — totalmente testável."""
+"""Núcleo de processamento (sem interface gráfica)."""
 
 from .modelos import Plantula, Calibracao, Projeto
-from .segmentacao import ParametrosSegmentacao
-from .analise import detectar_plantulas, gerar_mascara_visual
-from . import imagem, exportar
+from . import imagem, exportar, tracado
 
 __all__ = [
-    "Plantula", "Calibracao", "Projeto", "ParametrosSegmentacao",
-    "detectar_plantulas", "gerar_mascara_visual", "imagem", "exportar",
+    "Plantula", "Calibracao", "Projeto",
+    "imagem", "exportar", "tracado",
 ]

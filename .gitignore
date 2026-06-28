@@ -10,9 +10,6 @@ __pycache__/
 *.pyo
 *.pyd
 
-# Exemplos gerados (imagens anotadas e CSVs de saída)
-exemplos_demonstracao/
-
 # Outputs gerados pelo programa
 *_anotada.png
 *_medidas.csv

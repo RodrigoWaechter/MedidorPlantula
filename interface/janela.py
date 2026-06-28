@@ -30,8 +30,8 @@ class Aplicacao(tk.Tk):
         self.minsize(900, 600)
 
         self.projeto = Projeto()
-        self.img_bgr = None          # imagem original (numpy BGR)
-        self.roi_retangulo = None    # (x, y, w, h) área de trabalho, opcional
+        self.img_bgr = None
+        self.roi_retangulo = None
 
         self._construir_estilo()
         self._construir_barra()
@@ -41,7 +41,6 @@ class Aplicacao(tk.Tk):
 
         self.bind_all("<Control-o>", lambda e: self.abrir_imagem())
 
-    # ------------------------------------------------------------------ #
     def _construir_estilo(self):
         s = ttk.Style(self)
         try:
@@ -55,7 +54,7 @@ class Aplicacao(tk.Tk):
         barra = tk.Frame(self, bg="#e8e8e8", padx=6, pady=6)
         barra.grid(row=0, column=0, columnspan=2, sticky="ew")
 
-        def botao(txt, cmd, larg=None):
+        def botao(txt, cmd):
             b = tk.Button(barra, text=txt, command=cmd, relief="groove",
                           bg="#fafafa", padx=8, pady=4)
             b.pack(side="left", padx=2)
@@ -111,7 +110,6 @@ class Aplicacao(tk.Tk):
         self.lbl_resumo = tk.Label(painel, text="0 plântula(s)", bg="#f4f4f4")
         self.lbl_resumo.pack(anchor="w", padx=10, pady=(0, 10))
 
-        # legenda de cores
         leg = tk.Frame(painel, bg="#f4f4f4")
         leg.pack(anchor="w", padx=10, pady=(0, 10))
         for cor, txt in [("#3cb43c", "Segmento 1 (hipocótilo)"),
@@ -136,13 +134,11 @@ class Aplicacao(tk.Tk):
         self.canvas.ao_calibrar = self._ao_calibrar
         self.canvas.ao_definir_area = self._ao_definir_area
         self.canvas.ao_criar_plantula = self._ao_criar_plantula
+        self.canvas.ao_reabrir_plantula = self._ao_reabrir_plantula
         self.canvas.ao_mudar_selecao = self._ao_mudar_selecao
         self.canvas.ao_editar = self._ao_editar
         self.canvas.ao_status = self.var_status.set
 
-    # ------------------------------------------------------------------ #
-    #  Ações                                                              #
-    # ------------------------------------------------------------------ #
     def abrir_imagem(self):
         cam = filedialog.askopenfilename(
             title="Escolher imagem",
@@ -157,7 +153,7 @@ class Aplicacao(tk.Tk):
             messagebox.showerror("Não foi possível abrir", str(e))
             return
 
-        rgb = self.img_bgr[:, :, ::-1]  # BGR -> RGB
+        rgb = self.img_bgr[:, :, ::-1]  # BGR -> RGB para o Pillow
         pil = Image.fromarray(rgb)
         self.projeto = Projeto(caminho_imagem=cam)
         self.roi_retangulo = None
@@ -194,11 +190,13 @@ class Aplicacao(tk.Tk):
             return False
 
         import cv2
-        canal_v = cv2.cvtColor(self.img_bgr, cv2.COLOR_BGR2HSV)[:, :, 2]
-        idx_amostra = tracado.localizar_estrangulamento(amostras, canal_v)
+        gray = cv2.cvtColor(self.img_bgr, cv2.COLOR_BGR2GRAY)
+        idx_amostra = tracado.localizar_estrangulamento(amostras, gray)
         idx_amostra = max(0, min(idx_amostra, len(mapa) - 1))
         seg_i, t, x, y = mapa[idx_amostra]
 
+        # posiciona o estrangulamento num ponto existente ou insere um novo
+        # ponto interpolado quando cai no meio de um segmento
         if t <= 0.2:
             plantula.idx_estrangulamento = seg_i
         elif t >= 0.8:
@@ -209,6 +207,10 @@ class Aplicacao(tk.Tk):
         return True
 
     def _amostrar_caminho(self, caminho):
+        """
+        Interpola pontos ao longo do caminho a cada ~2 pixels, devolvendo
+        uma lista de (y, x) para o detector e um mapa de volta ao caminho original.
+        """
         if self.img_bgr is None or len(caminho) < 2:
             return [], []
 
@@ -240,7 +242,6 @@ class Aplicacao(tk.Tk):
             return
         self.canvas.set_modo(modo)
 
-    # ---- callbacks do canvas ----
     def _ao_calibrar(self, p1, p2):
         d_px = math.hypot(p2[0] - p1[0], p2[1] - p1[1])
         if d_px < 2:
@@ -262,8 +263,7 @@ class Aplicacao(tk.Tk):
 
     def _ao_definir_area(self, x, y, w, h):
         self.roi_retangulo = (x, y, w, h)
-        self.var_status.set(
-            "Área de trabalho definida.")
+        self.var_status.set("Área de trabalho definida.")
 
     def _ao_criar_plantula(self, caminho):
         p = self.projeto.adicionar_plantula(caminho, idx_estrang=0,
@@ -283,9 +283,18 @@ class Aplicacao(tk.Tk):
                 "Plântula medida manualmente. Arraste o ponto magenta para o "
                 "estrangulamento, onde está a semente.")
 
+    def _ao_reabrir_plantula(self):
+        """Chamado quando o usuário reabre e re-finaliza o traçado de uma plântula."""
+        plantula = self.canvas.selecionada
+        if plantula is not None:
+            self._aplicar_sugestao_estrangulamento(plantula)
+        self.canvas.redesenhar()
+        self._atualizar_tabela()
+        self.var_status.set(
+            "Traçado corrigido. Confira o ponto magenta e arraste se precisar ajustar.")
+
     def _ao_mudar_selecao(self):
         sel = self.canvas.selecionada
-        # destacar na tabela
         self.tabela.selection_remove(self.tabela.selection())
         if sel is not None:
             iid = str(id(sel))
@@ -309,9 +318,6 @@ class Aplicacao(tk.Tk):
             self.canvas.selecionada = alvo
             self.canvas.redesenhar()
 
-    # ------------------------------------------------------------------ #
-    #  Atualização da interface                                           #
-    # ------------------------------------------------------------------ #
     def _atualizar_tabela(self):
         cal = self.projeto.calibracao
         unidade = cal.unidade if cal.definida else "px"
@@ -340,9 +346,6 @@ class Aplicacao(tk.Tk):
             self.lbl_calib.config(text="Escala: não calibrada (medidas em pixels)",
                                   fg="#a05000")
 
-    # ------------------------------------------------------------------ #
-    #  Exportação                                                         #
-    # ------------------------------------------------------------------ #
     def exportar_csv(self):
         if not self.projeto.plantulas:
             messagebox.showinfo("Nada a exportar", "Não há plântulas medidas.")
@@ -431,13 +434,11 @@ class DialogoCalibracao(tk.Toplevel):
     def _mostrar_modal(self, parent):
         self.update_idletasks()
         parent.update_idletasks()
-
         largura = self.winfo_reqwidth()
         altura = self.winfo_reqheight()
         x = parent.winfo_rootx() + max(0, (parent.winfo_width() - largura) // 2)
         y = parent.winfo_rooty() + max(0, (parent.winfo_height() - altura) // 2)
         self.geometry(f"+{x}+{y}")
-
         self.deiconify()
         self.lift(parent)
         self.wait_visibility()

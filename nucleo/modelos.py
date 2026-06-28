@@ -1,15 +1,4 @@
-"""
-Estruturas de dados do projeto.
-
-Convenção de coordenadas
-------------------------
-Todos os pontos guardados nos modelos estão em coordenadas da IMAGEM ORIGINAL
-(em pixels), no formato (x, y) — x = coluna, y = linha.
-
-O processamento pesado é feito numa versão reduzida da imagem (por velocidade),
-mas o caminho resultante é sempre reescalado de volta para a resolução original.
-Assim a interface pode dar zoom à vontade e a exportação sai em alta resolução.
-"""
+"""Estruturas de dados do projeto."""
 
 from __future__ import annotations
 from dataclasses import dataclass, field
@@ -38,8 +27,8 @@ class Calibracao:
     """Converte pixels em unidade real (mm ou cm) a partir de dois pontos clicados."""
     p1: Optional[Ponto] = None
     p2: Optional[Ponto] = None
-    distancia_real: float = 0.0      # valor digitado pelo usuário
-    unidade: str = "cm"              # "cm" ou "mm"
+    distancia_real: float = 0.0
+    unidade: str = "cm"
 
     @property
     def definida(self) -> bool:
@@ -67,17 +56,15 @@ class Plantula:
     """
     Uma plântula medida.
 
-    caminho: pontos (x, y) do topo até a ponta da raiz, na ordem.
-    idx_estrangulamento: índice no caminho que separa o segmento 1 (hipocótilo)
-                         do segmento 2 (raiz).
+    caminho: pontos (x, y) do topo até a ponta da raiz, em ordem.
+    idx_estrangulamento: índice no caminho que separa o hipocótilo da raiz.
     """
     id: int
     caminho: List[Ponto] = field(default_factory=list)
     idx_estrangulamento: int = 0
-    rotulo: str = ""                 # ex.: "P1", "P2"...
-    origem_automatica: bool = True   # foi detectada (True) ou criada à mão (False)
+    rotulo: str = ""
+    origem_automatica: bool = False
 
-    # ---- pontos-chave (derivados do caminho) ----
     @property
     def topo(self) -> Optional[Ponto]:
         return self.caminho[0] if self.caminho else None
@@ -93,7 +80,6 @@ class Plantula:
         i = max(0, min(self.idx_estrangulamento, len(self.caminho) - 1))
         return self.caminho[i]
 
-    # ---- comprimentos em pixels ----
     @property
     def seg1_px(self) -> float:
         """Hipocótilo: do topo até o estrangulamento."""
@@ -113,7 +99,6 @@ class Plantula:
     def total_px(self) -> float:
         return comprimento_caminho(self.caminho, 0, len(self.caminho) - 1)
 
-    # ---- comprimentos em unidade real ----
     def medidas(self, cal: Calibracao) -> dict:
         """Retorna seg1, seg2 e total em pixels e (se calibrado) em unidade real."""
         d = {
@@ -183,7 +168,7 @@ class Projeto:
 
     def adicionar_plantula(self, caminho_pts: List[Ponto],
                            idx_estrang: int = 0,
-                           automatica: bool = True) -> Plantula:
+                           automatica: bool = False) -> Plantula:
         p = Plantula(id=self.proximo_id, caminho=list(caminho_pts),
                      idx_estrangulamento=idx_estrang,
                      rotulo=f"P{self.proximo_id}",
@@ -200,7 +185,6 @@ class Projeto:
         """Reordena os rótulos P1..Pn de cima para baixo, esquerda para direita."""
         def chave(p: Plantula):
             t = p.topo or (0, 0)
-            # agrupa por faixa vertical (~15% da altura) e depois por x
             return (round(t[1] / 50), t[0])
         self.plantulas.sort(key=chave)
         for i, p in enumerate(self.plantulas, start=1):
