@@ -14,7 +14,7 @@ from tkinter import ttk, filedialog, messagebox
 from PIL import Image
 
 from nucleo import imagem as nimg
-from nucleo import exportar, tracado
+from nucleo import exportar
 from nucleo.modelos import Projeto, Calibracao
 
 from interface.canvas_imagem import (
@@ -69,7 +69,7 @@ class Aplicacao(tk.Tk):
         botao("Calibrar escala", lambda: self._set_modo(MODO_CALIBRAR))
         sep()
         botao("Medir manualmente", lambda: self._set_modo(MODO_TRACAR))
-        botao("Sugerir estrangulamento", self.sugerir_estrangulamento)
+        botao("Ajustar estrangulamento", self.ajustar_estrangulamento)
         botao("Remover", self.remover_selecionada)
         sep()
         botao("Exportar CSV", self.exportar_csv)
@@ -165,73 +165,32 @@ class Aplicacao(tk.Tk):
             f"Imagem aberta: {os.path.basename(cam)}. "
             "Calibre a escala pela régua e use Medir manualmente em cada plântula.")
 
-    def sugerir_estrangulamento(self):
+    def ajustar_estrangulamento(self):
+        """
+        Coloca o estrangulamento num nó central do caminho da plântula
+        selecionada. A partir daí o usuário move o ponto magenta entre os nós,
+        arrastando-o ou usando as setas do teclado. Não há detecção automática.
+        """
         if self.img_bgr is None:
             messagebox.showinfo("Sem imagem", "Abra uma imagem primeiro.")
             return
         plantula = self.canvas.selecionada
         if plantula is None:
             messagebox.showinfo("Selecione uma plântula",
-                                "Trace ou selecione uma plântula manual antes.")
+                                "Trace ou selecione uma plântula antes.")
             return
-        if self._aplicar_sugestao_estrangulamento(plantula):
-            self.canvas.redesenhar()
-            self._atualizar_tabela()
-            self.var_status.set(
-                "Estrangulamento sugerido automaticamente. Confira o ponto magenta "
-                "e arraste se precisar ajustar.")
-        else:
+        if len(plantula.caminho) < 2:
             messagebox.showinfo("Traçado insuficiente",
                                 "Trace ao menos dois pontos da plântula antes.")
-
-    def _aplicar_sugestao_estrangulamento(self, plantula):
-        amostras, mapa = self._amostrar_caminho(plantula.caminho)
-        if len(amostras) < 4:
-            return False
-
-        import cv2
-        gray = cv2.cvtColor(self.img_bgr, cv2.COLOR_BGR2GRAY)
-        idx_amostra = tracado.localizar_estrangulamento(amostras, gray)
-        idx_amostra = max(0, min(idx_amostra, len(mapa) - 1))
-        seg_i, t, x, y = mapa[idx_amostra]
-
-        # posiciona o estrangulamento num ponto existente ou insere um novo
-        # ponto interpolado quando cai no meio de um segmento
-        if t <= 0.2:
-            plantula.idx_estrangulamento = seg_i
-        elif t >= 0.8:
-            plantula.idx_estrangulamento = min(seg_i + 1, len(plantula.caminho) - 1)
-        else:
-            plantula.caminho.insert(seg_i + 1, (x, y))
-            plantula.idx_estrangulamento = seg_i + 1
-        return True
-
-    def _amostrar_caminho(self, caminho):
-        """
-        Interpola pontos ao longo do caminho a cada ~2 pixels, devolvendo
-        uma lista de (y, x) para o detector e um mapa de volta ao caminho original.
-        """
-        if self.img_bgr is None or len(caminho) < 2:
-            return [], []
-
-        h, w = self.img_bgr.shape[:2]
-        amostras = []
-        mapa = []
-        for i in range(len(caminho) - 1):
-            ax, ay = caminho[i]
-            bx, by = caminho[i + 1]
-            dist = math.hypot(bx - ax, by - ay)
-            passos = max(1, int(math.ceil(dist / 2.0)))
-            inicio = 0 if i == 0 else 1
-            for s in range(inicio, passos + 1):
-                t = s / passos
-                x = ax + (bx - ax) * t
-                y = ay + (by - ay) * t
-                px = max(0, min(w - 1, int(round(x))))
-                py = max(0, min(h - 1, int(round(y))))
-                amostras.append((py, px))
-                mapa.append((i, t, x, y))
-        return amostras, mapa
+            return
+        plantula.idx_estrangulamento = len(plantula.caminho) // 2
+        self.canvas.selecionada = plantula
+        self.canvas.redesenhar()
+        self._atualizar_tabela()
+        self._ao_mudar_selecao()
+        self.var_status.set(
+            "Estrangulamento colocado num nó central. Arraste o ponto magenta "
+            "ou use as setas ← → (↑ ↓) para movê-lo entre os nós.")
 
     def remover_selecionada(self):
         self.canvas._deletar_selecionada()
@@ -265,33 +224,52 @@ class Aplicacao(tk.Tk):
         self.roi_retangulo = (x, y, w, h)
         self.var_status.set("Área de trabalho definida.")
 
-    def _ao_criar_plantula(self, caminho):
+    def _ao_criar_plantula(self, caminho, idx_estr=None):
         p = self.projeto.adicionar_plantula(caminho, idx_estrang=0,
                                             automatica=False)
-        sugerido = self._aplicar_sugestao_estrangulamento(p)
+        if idx_estr is not None:
+            # estrangulamento marcado manualmente durante o traçado (Shift+clique)
+            p.idx_estrangulamento = max(0, min(idx_estr, len(p.caminho) - 1))
+            marcado = True
+        else:
+            # sem marca: coloca num nó central, pronto para ser ajustado
+            p.idx_estrangulamento = len(p.caminho) // 2
+            marcado = False
         self.projeto.renumerar()
         self.canvas.definir_plantulas(self.projeto.plantulas)
         self.canvas.selecionada = p
         self._atualizar_tabela()
         self._ao_mudar_selecao()
-        if sugerido:
+        if marcado:
             self.var_status.set(
-                "Plântula medida manualmente. O ponto magenta foi sugerido; "
-                "arraste-o se precisar corrigir o estrangulamento.")
+                "Plântula medida. Estrangulamento marcado manualmente (ponto magenta); "
+                "arraste-o ou use as setas ← → para ajustar.")
         else:
             self.var_status.set(
-                "Plântula medida manualmente. Arraste o ponto magenta para o "
-                "estrangulamento, onde está a semente.")
+                "Plântula medida. Estrangulamento num nó central; arraste o ponto "
+                "magenta ou use as setas ← → para movê-lo entre os nós.")
 
-    def _ao_reabrir_plantula(self):
+    def _ao_reabrir_plantula(self, idx_estr=None):
         """Chamado quando o usuário reabre e re-finaliza o traçado de uma plântula."""
         plantula = self.canvas.selecionada
         if plantula is not None:
-            self._aplicar_sugestao_estrangulamento(plantula)
+            if idx_estr is not None:
+                plantula.idx_estrangulamento = max(
+                    0, min(idx_estr, len(plantula.caminho) - 1))
+            else:
+                # mantém o estrangulamento que já existia, apenas garantindo
+                # que o índice continue válido após a edição do caminho
+                plantula.idx_estrangulamento = max(
+                    0, min(plantula.idx_estrangulamento, len(plantula.caminho) - 1))
         self.canvas.redesenhar()
         self._atualizar_tabela()
-        self.var_status.set(
-            "Traçado corrigido. Confira o ponto magenta e arraste se precisar ajustar.")
+        if idx_estr is not None:
+            self.var_status.set(
+                "Traçado corrigido. Estrangulamento marcado manualmente (ponto magenta).")
+        else:
+            self.var_status.set(
+                "Traçado corrigido. Arraste o ponto magenta ou use as setas ← → "
+                "para ajustar o estrangulamento.")
 
     def _ao_mudar_selecao(self):
         sel = self.canvas.selecionada
