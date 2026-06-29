@@ -33,6 +33,9 @@ COR_AREA = "#00b0b0"   # ciano  - área de trabalho
 RAIO_ALCA = 6           # raio dos pontos de controle em pixels de tela
 TOLERANCIA_CLIQUE = 12  # distância máxima (px de tela) para "pegar" um ponto
 
+# Máscara do modificador Shift nos eventos do Tkinter (event.state)
+SHIFT_MASK = 0x0001
+
 
 class CanvasImagem(tk.Frame):
     def __init__(self, parent, **kw):
@@ -64,6 +67,7 @@ class CanvasImagem(tk.Frame):
         self._pan_inicio = None   # ponto inicial do pan com botão direito
         self._arrasto = None      # alça sendo arrastada no modo navegar
         self._pontos_temp: List[Tuple[float, float]] = []  # pontos do traçado em andamento
+        self._idx_estr_temp: Optional[int] = None  # índice marcado como estrangulamento durante o traçado
         self._retangulo_temp = None  # retângulo da área de trabalho sendo desenhado
         self._area_inicio = None
         self._mouse_canvas: Optional[Tuple[float, float]] = None  # posição atual do mouse
@@ -209,18 +213,43 @@ class CanvasImagem(tk.Frame):
         """
         Desenha os pontos já clicados no traçado em andamento e uma linha guia
         do último ponto até o cursor, para indicar o próximo trecho antes de clicar.
+
+        Se um ponto de estrangulamento já foi marcado (Shift+clique), o traçado
+        aparece dividido ao vivo: verde até o estrangulamento e azul depois dele,
+        com a marca em magenta. Assim os dois segmentos ficam visíveis na hora,
+        sem precisar conferir só no fim.
         """
         if not self._pontos_temp:
             return
-        pts = []
-        for (x, y) in self._pontos_temp:
-            cx, cy = self.img_para_canvas(x, y)
-            pts += [cx, cy]
-            self.canvas.create_oval(cx - 4, cy - 4, cx + 4, cy + 4,
-                                    fill=COR_SEL, outline="#ffffff")
-        if len(pts) >= 4:
-            cor = "#ffffff" if self.modo == MODO_CALIBRAR else COR_SEG2
-            self.canvas.create_line(*pts, fill=cor, width=2, dash=(4, 3))
+        pts = [self.img_para_canvas(x, y) for (x, y) in self._pontos_temp]
+
+        tem_marca = (self.modo == MODO_TRACAR and self._idx_estr_temp is not None)
+        if tem_marca:
+            ie = max(0, min(self._idx_estr_temp, len(pts) - 1))
+            # segmento 1: topo -> estrangulamento (verde)
+            if ie >= 1:
+                seg1 = [c for p in pts[:ie + 1] for c in p]
+                self.canvas.create_line(*seg1, fill=COR_SEG1, width=2, dash=(4, 3))
+            # segmento 2: estrangulamento -> ponta (azul)
+            if ie <= len(pts) - 2:
+                seg2 = [c for p in pts[ie:] for c in p]
+                self.canvas.create_line(*seg2, fill=COR_SEG2, width=2, dash=(4, 3))
+        else:
+            flat = [c for p in pts for c in p]
+            if len(flat) >= 4:
+                cor = "#ffffff" if self.modo == MODO_CALIBRAR else COR_SEG2
+                self.canvas.create_line(*flat, fill=cor, width=2, dash=(4, 3))
+
+        # pontos clicados; o ponto marcado aparece maior e em magenta
+        for i, (cx, cy) in enumerate(pts):
+            if tem_marca and i == self._idx_estr_temp:
+                r = RAIO_ALCA
+                self.canvas.create_oval(cx - r, cy - r, cx + r, cy + r,
+                                        fill=COR_ESTR, outline="#ffffff", width=2)
+            else:
+                self.canvas.create_oval(cx - 4, cy - 4, cx + 4, cy + 4,
+                                        fill=COR_SEL, outline="#ffffff")
+
         # linha guia até o cursor
         if self._mouse_canvas and self.modo in (MODO_TRACAR, MODO_CALIBRAR):
             ux, uy = self.img_para_canvas(*self._pontos_temp[-1])
@@ -232,6 +261,7 @@ class CanvasImagem(tk.Frame):
         """Muda o modo de interação e reinicia o estado temporário."""
         self.modo = modo
         self._pontos_temp = []
+        self._idx_estr_temp = None
         self._retangulo_temp = None
         self._arrasto = None
         self._area_inicio = None
@@ -248,14 +278,16 @@ class CanvasImagem(tk.Frame):
             return
         msg = {
             MODO_NAVEGAR: "Modo seleção: clique numa plântula para selecioná-la; "
-                          "arraste os pontos para ajustar. Roda do mouse = zoom, "
+                          "arraste os pontos para ajustar. Setas ← → movem o "
+                          "estrangulamento entre os nós. Roda do mouse = zoom, "
                           "botão direito = mover.",
             MODO_CALIBRAR: "Calibração: clique em dois pontos de distância conhecida "
                            "na régua. Depois informe a distância real.",
             MODO_AREA: "Área de trabalho: arraste um retângulo sobre o papel "
                        "(dentro da caixa) para limitar a detecção.",
             MODO_TRACAR: "Medição manual: clique ao longo do filamento, do topo até "
-                         "a ponta. Pressione Enter para concluir, Esc para cancelar.",
+                         "a ponta. No ponto de estrangulamento, segure Shift e clique "
+                         "(fica magenta). Enter para concluir, Esc para cancelar.",
         }.get(self.modo, "")
         self.ao_status(msg)
 
@@ -278,6 +310,11 @@ class CanvasImagem(tk.Frame):
         c.bind("<Return>", lambda e: self._concluir_tracado())
         c.bind("<Escape>", lambda e: self.set_modo(MODO_NAVEGAR))
         c.bind("<Delete>", lambda e: self._deletar_selecionada())
+        # setas movem o estrangulamento da plântula selecionada entre os nós
+        c.bind("<Left>", lambda e: self._passo_estrangulamento(-1))
+        c.bind("<Up>", lambda e: self._passo_estrangulamento(-1))
+        c.bind("<Right>", lambda e: self._passo_estrangulamento(1))
+        c.bind("<Down>", lambda e: self._passo_estrangulamento(1))
         c.configure(takefocus=True)
         c.bind("<Enter>", lambda e: c.focus_set())
 
@@ -329,6 +366,10 @@ class CanvasImagem(tk.Frame):
 
         elif self.modo == MODO_TRACAR:
             self._pontos_temp.append((ix, iy))
+            # Shift pressionado: este ponto marca o estrangulamento (transição
+            # hipocótilo/raiz). Um novo Shift+clique mais adiante reposiciona a marca.
+            if e.state & SHIFT_MASK:
+                self._idx_estr_temp = len(self._pontos_temp) - 1
             self.redesenhar()
 
     def _move1(self, e):
@@ -393,6 +434,9 @@ class CanvasImagem(tk.Frame):
         self._plantula_editando = plantula
         self.selecionada = plantula
         self._pontos_temp = list(plantula.caminho)
+        # preserva a marca de estrangulamento se ela ainda estiver no trecho mantido
+        ie = plantula.idx_estrangulamento
+        self._idx_estr_temp = ie if 0 < ie < len(self._pontos_temp) - 1 else None
         self.modo = MODO_TRACAR
         self.canvas.configure(cursor="pencil")
         self._status_do_modo()
@@ -402,17 +446,33 @@ class CanvasImagem(tk.Frame):
         if self.modo != MODO_TRACAR or len(self._pontos_temp) < 2:
             return
         caminho = list(self._pontos_temp)
+        idx_estr = self._idx_estr_temp
+        if idx_estr is not None:
+            idx_estr = max(0, min(idx_estr, len(caminho) - 1))
         self._pontos_temp = []
+        self._idx_estr_temp = None
         if self._plantula_editando is not None:
             # atualiza a plântula existente em vez de criar uma nova
             self._plantula_editando.caminho = caminho
             self._plantula_editando = None
             if self.ao_reabrir_plantula:
-                self.ao_reabrir_plantula()
+                self.ao_reabrir_plantula(idx_estr)
         else:
             if self.ao_criar_plantula:
-                self.ao_criar_plantula(caminho)
+                self.ao_criar_plantula(caminho, idx_estr)
         self.set_modo(MODO_NAVEGAR)
+
+    def _passo_estrangulamento(self, delta):
+        """Move o estrangulamento da plântula selecionada delta nós (±1)."""
+        p = self.selecionada
+        if self.modo != MODO_NAVEGAR or p is None or len(p.caminho) < 2:
+            return
+        novo = max(0, min(p.idx_estrangulamento + delta, len(p.caminho) - 1))
+        if novo != p.idx_estrangulamento:
+            p.idx_estrangulamento = novo
+            if self.ao_editar:
+                self.ao_editar()
+            self.redesenhar()
 
     def _deletar_selecionada(self):
         if self.selecionada is not None and self.selecionada in self.plantulas:

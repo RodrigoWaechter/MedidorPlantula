@@ -7,7 +7,8 @@ Cada plântula é medida em **dois segmentos**, seguindo o caminho real da
 estrutura (acompanhando curvas, não em linha reta):
 
 - **Segmento 1 – hipocótilo:** do topo da estrutura branca até o estrangulamento
-  (onde fica a semente).
+  (o ponto de transição, no meio da raiz branca — não confundir com a semente
+  escura no topo).
 - **Segmento 2 – raiz:** do estrangulamento até a ponta da raiz.
 - **Total:** a soma dos dois.
 
@@ -52,11 +53,17 @@ Uma janela vai abrir. O fluxo recomendado é:
    (por exemplo, o começo e o fim de 10 cm) e informe quantos centímetros há
    entre eles. A partir daí as medidas saem na unidade real.
 3. **Medir manualmente** — clique ao longo do filamento de cada plântula, do
-   topo até a ponta da raiz, acompanhando as curvas. Pressione **Enter** para
-   concluir (ou **Esc** para cancelar).
-4. **Sugerir estrangulamento** — o ponto **magenta** é sugerido
-   automaticamente a partir da região mais escura próxima ao topo, mas deve ser
-   conferido. Se necessário, arraste-o para o lugar onde está a semente.
+   topo até a ponta da raiz, acompanhando as curvas. **No ponto de
+   estrangulamento (a transição no meio da raiz branca), segure `Shift` e
+   clique:** esse ponto é marcado como estrangulamento e o traçado já aparece
+   dividido na hora — verde até ali (hipocótilo) e azul depois (raiz), com a
+   marca em magenta. Pressione **Enter** para concluir (ou **Esc** para cancelar).
+4. **Ajustar o estrangulamento** — o ponto **magenta** pode ser movido a
+   qualquer momento, de duas formas: arrastando-o (ele gruda no nó mais próximo)
+   ou com as **setas ← → (↑ ↓)** do teclado, que o passam de nó em nó. O botão
+   **Ajustar estrangulamento** simplesmente coloca o ponto num nó central da
+   plântula selecionada, útil quando ele está fora de vista ou você quer
+   recomeçar o ajuste. Não há mais detecção automática por imagem.
 5.  **Remover:** selecione uma plântula e clique em **Remover** (ou tecla
      Delete) para apagar medições erradas.
 6. **Exportar CSV** e **Exportar imagem** — salva a tabela com as medidas e a
@@ -73,7 +80,7 @@ Uma janela vai abrir. O fluxo recomendado é:
 | Verde     | Segmento 1 (hipocótilo)     |
 | Azul      | Segmento 2 (raiz)           |
 | Vermelho  | Topo                        |
-| Magenta   | Estrangulamento (semente)   |
+| Magenta   | Estrangulamento (transição)  |
 | Amarelo   | Ponta da raiz               |
 
 ---
@@ -105,8 +112,11 @@ calibração.
 2. O usuário traça manualmente cada plântula do topo até a ponta da raiz.
 3. O programa soma as distâncias entre os pontos traçados para obter o
    comprimento digital em pixels.
-4. O **estrangulamento** pode ser sugerido automaticamente pelo ponto mais escuro
-   próximo ao topo do caminho, mas permanece ajustável pelo usuário.
+4. O **estrangulamento** é definido pelo usuário: marcado durante o traçado
+   (`Shift`+clique no ponto de transição) ou ajustado depois arrastando o ponto
+   magenta / usando as setas do teclado para percorrer os nós. O botão **Ajustar
+   estrangulamento** apenas o reposiciona num nó central. Não há detecção
+   automática por análise de imagem.
 5. Os comprimentos são convertidos para unidade real usando a calibração feita
    na régua da imagem ou em outra referência conhecida.
 
@@ -122,7 +132,7 @@ medidor_plantulas/
 ├── nucleo/              Processamento de imagem (sem interface)
 │   ├── modelos.py         Plântula, Calibração, Projeto
 │   ├── imagem.py          Abrir e salvar imagens (inclui HEIC opcional)
-│   ├── tracado.py         Esqueleto, caminho real e estrangulamento
+│   ├── tracado.py         Utilidades de caminho (escala, simplificação)
 │   └── exportar.py        Gera a tabela CSV e a imagem anotada
 └── interface/           Interface gráfica (Tkinter)
     ├── canvas_imagem.py   Área de visualização (zoom, edição, traçado)
