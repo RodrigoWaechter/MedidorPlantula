@@ -70,6 +70,7 @@ Uma janela vai abrir. O fluxo recomendado é:
    foto com as marcações. O CSV exige escala calibrada para registrar valores em
    centímetros ou milímetros.
 
+
 ### Navegação na imagem
 - **Roda do mouse:** aproximar / afastar (zoom).
 - **Botão direito (ou do meio) arrastando:** mover a imagem.
@@ -82,6 +83,8 @@ Uma janela vai abrir. O fluxo recomendado é:
 | Vermelho  | Topo                        |
 | Magenta   | Estrangulamento (transição)  |
 | Amarelo   | Ponta da raiz               |
+
+<img width="1195" height="807" alt="plantulas-selecionar-escala" src="https://github.com/user-attachments/assets/0dc56944-5824-45bb-aac5-ea01c935b6e1" />
 
 ---
 
@@ -119,6 +122,8 @@ calibração.
    automática por análise de imagem.
 5. Os comprimentos são convertidos para unidade real usando a calibração feita
    na régua da imagem ou em outra referência conhecida.
+   
+<img width="1195" height="807" alt="image" src="https://github.com/user-attachments/assets/b92c1ca4-c713-42f8-9f8b-0d0ce43882f8" />
 
 ---
 
@@ -142,3 +147,11 @@ medidor_plantulas/
 
 O `nucleo` não depende da interface: toda a parte de medição pode ser usada
 sozinha (pela linha de comando) e foi testada de forma independente.
+
+---
+
+## 6. Autores do projeto
+
+- Gabriel Fontanari
+- Lucas Souza da Silva
+- Rodrigo Hammes Waechter
