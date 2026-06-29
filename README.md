@@ -63,7 +63,7 @@ Uma janela vai abrir. O fluxo recomendado é:
    ou com as **setas ← → (↑ ↓)** do teclado, que o passam de nó em nó. O botão
    **Ajustar estrangulamento** simplesmente coloca o ponto num nó central da
    plântula selecionada, útil quando ele está fora de vista ou você quer
-   recomeçar o ajuste. Não há mais detecção automática por imagem.
+   recomeçar o ajuste. Não há detecção automática por imagem.
 5.  **Remover:** selecione uma plântula e clique em **Remover** (ou tecla
      Delete) para apagar medições erradas.
 6. **Exportar CSV** e **Exportar imagem** — salva a tabela com as medidas e a
