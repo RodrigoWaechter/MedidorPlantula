@@ -13,7 +13,7 @@ def _dist(a: Ponto, b: Ponto) -> float:
 
 
 def comprimento_caminho(caminho: List[Ponto], ini: int = 0, fim: Optional[int] = None) -> float:
-    """Comprimento de arco (soma das distâncias) de um trecho do caminho, em pixels."""
+    """Soma das distâncias entre pontos consecutivos de ini até fim, em pixels."""
     if fim is None:
         fim = len(caminho) - 1
     total = 0.0
@@ -37,6 +37,7 @@ class Calibracao:
 
     @property
     def px_por_unidade(self) -> Optional[float]:
+        """Razão entre a distância em pixels e a distância real informada."""
         if not self.definida:
             return None
         d_px = _dist(self.p1, self.p2)
@@ -45,6 +46,7 @@ class Calibracao:
         return d_px / self.distancia_real
 
     def px_para_unidade(self, valor_px: float) -> Optional[float]:
+        """Converte um valor em pixels para a unidade real calibrada."""
         ppu = self.px_por_unidade
         if ppu is None:
             return None
@@ -56,8 +58,10 @@ class Plantula:
     """
     Uma plântula medida.
 
-    caminho: pontos (x, y) do topo até a ponta da raiz, em ordem.
-    idx_estrangulamento: índice no caminho que separa o hipocótilo da raiz.
+    caminho: lista de pontos (x, y) do topo até a ponta da raiz.
+    idx_estrangulamento: índice no caminho que divide os dois segmentos:
+      - Segmento 1 (hipocótilo): índice 0 até idx_estrangulamento.
+      - Segmento 2 (raiz):       idx_estrangulamento até o último ponto.
     """
     id: int
     caminho: List[Ponto] = field(default_factory=list)
@@ -82,14 +86,14 @@ class Plantula:
 
     @property
     def seg1_px(self) -> float:
-        """Hipocótilo: do topo até o estrangulamento."""
+        """Comprimento do hipocótilo em pixels (topo → estrangulamento)."""
         if len(self.caminho) < 2:
             return 0.0
         return comprimento_caminho(self.caminho, 0, self.idx_estrangulamento)
 
     @property
     def seg2_px(self) -> float:
-        """Raiz: do estrangulamento até a ponta."""
+        """Comprimento da raiz em pixels (estrangulamento → ponta)."""
         if len(self.caminho) < 2:
             return 0.0
         return comprimento_caminho(self.caminho, self.idx_estrangulamento,
@@ -97,10 +101,14 @@ class Plantula:
 
     @property
     def total_px(self) -> float:
+        """Comprimento total em pixels (topo → ponta)."""
         return comprimento_caminho(self.caminho, 0, len(self.caminho) - 1)
 
     def medidas(self, cal: Calibracao) -> dict:
-        """Retorna seg1, seg2 e total em pixels e (se calibrado) em unidade real."""
+        """
+        Retorna seg1, seg2 e total na unidade real calibrada,
+        ou em pixels se a calibração não estiver definida.
+        """
         d = {
             "rotulo": self.rotulo or f"P{self.id}",
             "seg1_px": self.seg1_px,
@@ -130,7 +138,7 @@ class Plantula:
         self.idx_estrangulamento = melhor
 
     def recortar_topo_em(self, ponto: Ponto) -> None:
-        """Move o topo: descarta os pontos antes do mais próximo de `ponto`."""
+        """Descarta os pontos do caminho anteriores ao mais próximo de `ponto`."""
         if len(self.caminho) < 2:
             return
         i = self._indice_mais_proximo(ponto)
@@ -140,7 +148,7 @@ class Plantula:
         self.idx_estrangulamento = max(0, self.idx_estrangulamento - i)
 
     def recortar_ponta_em(self, ponto: Ponto) -> None:
-        """Move a ponta: descarta os pontos depois do mais próximo de `ponto`."""
+        """Descarta os pontos do caminho posteriores ao mais próximo de `ponto`."""
         if len(self.caminho) < 2:
             return
         i = self._indice_mais_proximo(ponto)
@@ -182,7 +190,7 @@ class Projeto:
             self.plantulas.remove(plantula)
 
     def renumerar(self) -> None:
-        """Reordena os rótulos P1..Pn de cima para baixo, esquerda para direita."""
+        """Reordena os rótulos P1 Pn por posição visual (cima para baixo, esquerda para direita)."""
         def chave(p: Plantula):
             t = p.topo or (0, 0)
             return (round(t[1] / 50), t[0])
